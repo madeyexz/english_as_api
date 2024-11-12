@@ -7,7 +7,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import re
 from typing import Dict, List, Optional, Union
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from urllib.parse import urljoin, urlparse
 import time
 from collections import defaultdict
@@ -34,6 +34,9 @@ class PageSection:
     purpose: str
     has_interactive_elements: bool
     content: Dict
+
+    def to_dict(self):
+        return asdict(self)
 
 class WebpageSemanticParser:
     def __init__(self, use_selenium: bool = True, timeout: int = 30):
@@ -86,6 +89,46 @@ class WebpageSemanticParser:
                 'href': absolute_url
             })
         return links
+    def extract_structured_data(self) -> Dict:
+        """Extract structured data such as JSON-LD, microdata, and Open Graph from the page."""
+        structured_data = {
+            'json_ld': [],
+            'microdata': [],
+            'open_graph': {}
+        }
+        
+        # Extract JSON-LD
+        for script in self.soup.find_all('script', type='application/ld+json'):
+            try:
+                data = json.loads(script.string)
+                structured_data['json_ld'].append(data)
+                logger.debug("Extracted JSON-LD data")
+            except json.JSONDecodeError:
+                logger.warning("Failed to decode JSON-LD script")
+        
+        # Extract Open Graph data
+        for meta in self.soup.find_all('meta'):
+            if meta.get('property', '').startswith('og:'):
+                prop = meta.get('property')[3:]
+                content = meta.get('content', '')
+                structured_data['open_graph'][prop] = content
+                logger.debug(f"Extracted Open Graph property: og:{prop}")
+        
+        # Extract Microdata
+        for item in self.soup.find_all(attrs={'itemscope': True}):
+            item_type = item.get('itemtype', 'Unknown')
+            item_properties = {}
+            for prop in item.find_all(attrs={'itemprop': True}):
+                prop_name = prop.get('itemprop')
+                prop_value = prop.get('content') or prop.get_text(strip=True)
+                item_properties[prop_name] = prop_value
+            structured_data['microdata'].append({
+                'type': item_type,
+                'properties': item_properties
+            })
+            logger.debug(f"Extracted Microdata type: {item_type}")
+        
+        return structured_data
 
     def parse_webpage(self, url: str) -> Dict:
         """Main parsing function to analyze webpage content and structure."""
@@ -108,8 +151,11 @@ class WebpageSemanticParser:
         self.soup = BeautifulSoup(page_source, 'html.parser')
         self.base_url = url
         
-        # Add this line to extract all links
+        # Extract all links
         all_links = self.extract_all_links(self.soup)
+        
+        # Extract structured data
+        structured_data = self.extract_structured_data()
         
         logger.info("Identifying interactive elements")
         self.identify_interactive_elements()
@@ -120,7 +166,8 @@ class WebpageSemanticParser:
             'actions': self.get_available_actions(),
             'structure': self.semantic_structure,
             'possible_tasks': self.identify_possible_tasks(),
-            'all_links': all_links  # Add this line
+            'all_links': all_links,
+            'structured_data': structured_data  # Add structured data to the output
         }
 
     def identify_interactive_elements(self):
@@ -242,11 +289,20 @@ class WebpageSemanticParser:
     def parse_main_content(self) -> Dict:
         """Parse main content area of the page."""
         logger.debug("Parsing main content area")
-        main = self.soup.find('main') or self.soup.find('body')
+        # Look for any content, not just semantic elements
+        main = self.soup.find('body')
+        
+        # Extract text content directly if no semantic structure exists
+        text_content = ' '.join([
+            p.get_text(strip=True) 
+            for p in main.find_all(['p', 'div', 'span'])
+            if p.get_text(strip=True)
+        ])
         
         return {
             'headings': self.extract_heading_hierarchy(main),
-            'sections': self.extract_sections(main)
+            'sections': self.extract_sections(main),
+            'text_content': text_content  # Add raw text content
         }
 
     def extract_heading_hierarchy(self, container) -> List[Dict]:
@@ -265,21 +321,21 @@ class WebpageSemanticParser:
             
         return hierarchy
 
-    def extract_sections(self, container) -> List[PageSection]:
+    def extract_sections(self, container) -> List[Dict]:
         """Extract content sections and their purposes."""
         sections = []
-        for section in container.find_all(['section', 'article', 'div']):
-            if 'region' in section.get('role', ''):
-                heading = section.find(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
-                has_interactive = bool(section.find(['button', 'input', 'a', 'select']))
+        for section in container.find_all(['div', 'p', 'table']):
+            if section.get_text(strip=True):
+                heading = section.find_previous(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+                has_interactive = bool(section.find(['a', 'input']))
                 
                 sections.append(PageSection(
                     heading=heading.get_text(strip=True) if heading else None,
                     purpose=self.infer_section_purpose(section),
                     has_interactive_elements=has_interactive,
                     content=self.extract_section_content(section)
-                ))
-                
+                ).to_dict())
+        
         logger.debug(f"Extracted {len(sections)} content sections")
         return sections
 
@@ -446,7 +502,7 @@ class WebpageSemanticParser:
         logger.debug(f"Identified {len(tasks)} possible tasks")
         return tasks
 
-    def traverse_links(self, url: str, depth: int = 3, visited: Optional[set] = None, max_pages: int = 100) -> Dict:
+    def traverse_links(self, url: str, depth: int = 5, visited: Optional[set] = None, max_pages: int = 100) -> Dict:
         if visited is None:
             visited = set()
         
@@ -561,12 +617,12 @@ def analyze_webpage_with_traversal(url: str) -> Dict:
     return index_tree
 
 def main():
-    URL = "https://heptabase.com"
+    URL = "https://read.readwise.io/"
     logger.info("Starting main function")
     parser = WebpageSemanticParser()
     understanding = parser.parse_webpage(URL)
     with open('understanding.json', 'w') as f:
-        json.dump(understanding, f)
+        json.dump(understanding, f, indent=2, default=lambda o: o.to_dict() if hasattr(o, 'to_dict') else str(o))
     logger.info("Main function completed")
 
     logger.info("Starting main function with traversal")

@@ -59,7 +59,7 @@ The goal is to feed this structured understanding to Claude to enable more infor
 1. Create a virtual environment:
 
 ```bash
-uv venv
+uv venv; source .venv/bin/activate
 ```
 
 2. Install dependencies:

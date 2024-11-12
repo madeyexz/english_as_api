@@ -1,3 +1,4 @@
+import json
 import logging
 from bs4 import BeautifulSoup
 from selenium import webdriver
@@ -125,16 +126,23 @@ class WebpageSemanticParser:
 
     def infer_purpose(self, element) -> str:
         """Infer the purpose of an element based on various signals."""
+        # Get all potential signals
         signals = [
             element.get_text(strip=True),
             element.get('aria-label'),
             element.get('title'),
             element.get('placeholder'),
             element.get('name'),
-            element.get('id'),
-            element.get('class')
+            element.get('id')
         ]
-        signals = [s for s in signals if s]
+        
+        # Handle class list separately
+        class_list = element.get('class', [])
+        if class_list:
+            signals.append(' '.join(class_list))  # Convert class list to space-separated string
+        
+        # Filter out None values
+        signals = [str(s) for s in signals if s]
         
         action_patterns = {
             'submit': r'submit|send|save|confirm|ok|apply',
@@ -168,9 +176,13 @@ class WebpageSemanticParser:
                 heading = heading_tag.get_text(strip=True)
                 break
 
+        # Find parent form and get its name if it exists
+        parent_form = element.find_parent('form')
+        form_name = parent_form.get('name') if parent_form else None
+
         return {
             'section_heading': heading,
-            'form_name': element.find_parent('form', {'name': True}).get('name') if element.find_parent('form') else None,
+            'form_name': form_name,
             'in_navigation': bool(element.find_parent('nav')),
             'in_list': bool(element.find_parent(['ul', 'ol'])),
             'url': urljoin(self.base_url, element.get('href', '')) if element.name == 'a' else None
@@ -409,8 +421,9 @@ def analyze_webpage(url: str) -> Dict:
 def main():
     logger.info("Starting main function")
     parser = WebpageSemanticParser()
-    understanding = parser.parse_webpage("https://heptabase.com")
-    print(understanding)
+    understanding = parser.parse_webpage("https://www.google.com")
+    with open('understanding.json', 'w') as f:
+        json.dump(understanding, f)
     logger.info("Main function completed")
 
 

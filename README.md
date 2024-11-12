@@ -26,5 +26,56 @@ There are several approaches to make Computer Use more capable, I will focus on 
    - Develop an autonomous agent system that explores and learns interfaces through trial and error, leveraging reinforcement learning to optimize interactions while building and maintaining a knowledge base of successful patterns. (too complicated)
 
 
+### Current Implementation
 
+The current implementation focuses on the Dynamic Analysis approach. It consists of:
+
+1. A semantic parser that analyzes web pages to understand:
+   - Page structure and hierarchy
+   - Interactive elements (buttons, forms, links)
+   - Navigation patterns
+   - Content sections and their purposes
+   - Available actions and tasks
+
+2. JSON output that provides:
+   - Structured representation of the page
+   - Mapped user interface elements
+   - Possible interactions and their contexts
+   - Semantic relationships between elements
+
+The goal is to feed this structured understanding to Claude to enable more informed interactions with web interfaces.
+
+### Next Steps
+
+1. Improve semantic parsing accuracy
+2. Add support for dynamic content analysis
+3. Implement better action inference
+4. Create a standardized format for context sharing
+5. Test with various web applications
+6. Integrate with Claude's Computer Use capability
+
+### Installation
+
+1. Create a virtual environment:
+
+```bash
+uv venv
+```
+
+2. Install dependencies:
+
+```bash
+uv pip install -r requirements.txt
+```
+
+3. Set the `URL` variable in `webpage_semantic_parser.py` to the URL of the webpage you want to analyze, then run the script:
+
+```bash
+python webpage_semantic_parser.py
+```
+4. Results will be saved in `understanding.json` and `index_tree.json`.
+
+### Contributing
+
+Feel free to open issues or submit PRs to help improve the implementation.
 

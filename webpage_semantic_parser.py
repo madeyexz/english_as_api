@@ -8,7 +8,10 @@ from selenium.webdriver.support import expected_conditions as EC
 import re
 from typing import Dict, List, Optional, Union
 from dataclasses import dataclass
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
+import time
+from collections import defaultdict
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -33,26 +36,60 @@ class PageSection:
     content: Dict
 
 class WebpageSemanticParser:
-    def __init__(self, use_selenium: bool = True):
+    def __init__(self, use_selenium: bool = True, timeout: int = 30):
         self.use_selenium = use_selenium
         self.driver = None
+        self.timeout = timeout
         if use_selenium:
             # Initialize headless Chrome driver
             logger.info("Initializing headless Chrome driver")
             options = webdriver.ChromeOptions()
             options.add_argument('--headless')
+            options.add_argument('--disable-gpu')
+            options.add_argument('--no-sandbox')
+            options.add_argument('--disable-dev-shm-usage')
+            # Add page load timeout
             self.driver = webdriver.Chrome(options=options)
+            self.driver.set_page_load_timeout(self.timeout)
         
         self.actionable_elements = {}
         self.semantic_structure = {}
+        self.last_request_time = defaultdict(float)
+        self.request_delay = 1.0  # Minimum seconds between requests to same domain
+        self.stats = {
+            'pages_visited': 0,
+            'start_time': None,
+            'errors': 0
+        }
         
     def __del__(self):
         if self.driver:
             logger.info("Closing Chrome driver")
             self.driver.quit()
 
+    def _respect_rate_limits(self, url: str):
+        """Implement rate limiting per domain"""
+        domain = urlparse(url).netloc
+        elapsed = time.time() - self.last_request_time[domain]
+        if elapsed < self.request_delay:
+            time.sleep(self.request_delay - elapsed)
+        self.last_request_time[domain] = time.time()
+
+    def extract_all_links(self, soup) -> List[Dict]:
+        """Extract all links from the page"""
+        links = []
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            absolute_url = urljoin(self.base_url, href)
+            links.append({
+                'text': a.get_text(strip=True),
+                'href': absolute_url
+            })
+        return links
+
     def parse_webpage(self, url: str) -> Dict:
         """Main parsing function to analyze webpage content and structure."""
+        self._respect_rate_limits(url)
         logger.info(f"Starting to parse webpage: {url}")
         if self.use_selenium:
             logger.debug("Using Selenium to fetch page content")
@@ -71,6 +108,9 @@ class WebpageSemanticParser:
         self.soup = BeautifulSoup(page_source, 'html.parser')
         self.base_url = url
         
+        # Add this line to extract all links
+        all_links = self.extract_all_links(self.soup)
+        
         logger.info("Identifying interactive elements")
         self.identify_interactive_elements()
         logger.info("Building semantic hierarchy")
@@ -79,7 +119,8 @@ class WebpageSemanticParser:
         return {
             'actions': self.get_available_actions(),
             'structure': self.semantic_structure,
-            'possible_tasks': self.identify_possible_tasks()
+            'possible_tasks': self.identify_possible_tasks(),
+            'all_links': all_links  # Add this line
         }
 
     def identify_interactive_elements(self):
@@ -405,6 +446,99 @@ class WebpageSemanticParser:
         logger.debug(f"Identified {len(tasks)} possible tasks")
         return tasks
 
+    def traverse_links(self, url: str, depth: int = 3, visited: Optional[set] = None, max_pages: int = 100) -> Dict:
+        if visited is None:
+            visited = set()
+        
+        if len(visited) >= max_pages:
+            logger.warning(f"Reached maximum page limit of {max_pages}")
+            return {}
+        
+        if depth == 0 or url in visited:
+            return {}
+        
+        logger.info(f"Traversing URL: {url} at depth {depth}")
+        visited.add(url)
+        
+        try:
+            page_data = self.parse_webpage(url)
+        except Exception as e:
+            logger.error(f"Failed to parse page {url}: {e}")
+            return {
+                'url': url,
+                'error': str(e),
+                'links': []
+            }
+        
+        index_tree = {
+            'url': url,
+            'title': page_data['structure'].get('title'),
+            'links': []
+        }
+        
+        for link in page_data['all_links']:
+            link_url = link['href']
+            if link_url not in visited and self._should_follow_link(link_url):
+                child_index = self.traverse_links(link_url, depth - 1, visited, max_pages)
+                if child_index:
+                    index_tree['links'].append(child_index)
+        
+        return index_tree
+
+    def _should_follow_link(self, url: str) -> bool:
+        try:
+            parsed = urlparse(url)
+            
+            # Skip non-HTTP(S) protocols
+            if parsed.scheme not in ('http', 'https'):
+                return False
+                
+            # Skip certain file types
+            skip_extensions = {'.pdf', '.jpg', '.png', '.gif', '.zip'}
+            if any(url.lower().endswith(ext) for ext in skip_extensions):
+                return False
+                
+            # Optional: Stay within same domain
+            if parsed.netloc != urlparse(self.base_url).netloc:
+                return False
+                
+            return True
+        except Exception as e:
+            logger.error(f"Error checking URL {url}: {e}")
+            return False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
+
+    def cleanup(self):
+        """Cleanup resources properly"""
+        if self.driver:
+            try:
+                self.driver.quit()
+            except Exception as e:
+                logger.error(f"Error closing driver: {e}")
+            finally:
+                self.driver = None
+
+    def _update_stats(self, error: bool = False):
+        """Update crawling statistics"""
+        self.stats['pages_visited'] += 1
+        if error:
+            self.stats['errors'] += 1
+    
+    def get_stats(self) -> Dict:
+        """Get crawling statistics"""
+        if self.stats['start_time']:
+            duration = datetime.now() - self.stats['start_time']
+            return {
+                **self.stats,
+                'duration_seconds': duration.total_seconds()
+            }
+        return self.stats
+
 # Example usage
 def analyze_webpage(url: str) -> Dict:
     logger.info(f"Starting webpage analysis for: {url}")
@@ -418,14 +552,28 @@ def analyze_webpage(url: str) -> Dict:
     
     return understanding
 
+def analyze_webpage_with_traversal(url: str) -> Dict:
+    logger.info(f"Starting webpage analysis with traversal for: {url}")
+    parser = WebpageSemanticParser(use_selenium=True)
+    index_tree = parser.traverse_links(url)
+    
+    logger.info("Traversal and analysis complete")
+    return index_tree
+
 def main():
+    URL = "https://heptabase.com"
     logger.info("Starting main function")
     parser = WebpageSemanticParser()
-    understanding = parser.parse_webpage("https://www.google.com")
+    understanding = parser.parse_webpage(URL)
     with open('understanding.json', 'w') as f:
         json.dump(understanding, f)
     logger.info("Main function completed")
 
+    logger.info("Starting main function with traversal")
+    index_tree = analyze_webpage_with_traversal(URL)
+    with open('index_tree.json', 'w') as f:
+        json.dump(index_tree, f, indent=2)
+    logger.info("Main function with traversal completed")
 
 # To use the parser:
 if __name__ == "__main__":

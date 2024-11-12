@@ -1,3 +1,4 @@
+import logging
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -7,6 +8,13 @@ import re
 from typing import Dict, List, Optional, Union
 from dataclasses import dataclass
 from urllib.parse import urljoin
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ElementSemantics:
@@ -29,6 +37,7 @@ class WebpageSemanticParser:
         self.driver = None
         if use_selenium:
             # Initialize headless Chrome driver
+            logger.info("Initializing headless Chrome driver")
             options = webdriver.ChromeOptions()
             options.add_argument('--headless')
             self.driver = webdriver.Chrome(options=options)
@@ -38,11 +47,14 @@ class WebpageSemanticParser:
         
     def __del__(self):
         if self.driver:
+            logger.info("Closing Chrome driver")
             self.driver.quit()
 
     def parse_webpage(self, url: str) -> Dict:
         """Main parsing function to analyze webpage content and structure."""
+        logger.info(f"Starting to parse webpage: {url}")
         if self.use_selenium:
+            logger.debug("Using Selenium to fetch page content")
             self.driver.get(url)
             # Wait for dynamic content to load
             WebDriverWait(self.driver, 10).until(
@@ -51,13 +63,16 @@ class WebpageSemanticParser:
             page_source = self.driver.page_source
         else:
             # For static pages, use simple HTTP request
+            logger.debug("Using requests to fetch static page content")
             import requests
             page_source = requests.get(url).text
 
         self.soup = BeautifulSoup(page_source, 'html.parser')
         self.base_url = url
         
+        logger.info("Identifying interactive elements")
         self.identify_interactive_elements()
+        logger.info("Building semantic hierarchy")
         self.build_semantic_hierarchy()
         
         return {
@@ -68,6 +83,7 @@ class WebpageSemanticParser:
 
     def identify_interactive_elements(self):
         """Identify all interactive elements on the page."""
+        logger.debug("Searching for interactive elements")
         # Find all potentially interactive elements
         selectors = [
             'button', 'input', 'a', 'select', 
@@ -77,6 +93,7 @@ class WebpageSemanticParser:
         
         for selector in selectors:
             elements = self.soup.select(selector)
+            logger.debug(f"Found {len(elements)} elements matching selector: {selector}")
             for element in elements:
                 semantics = self.analyze_element(element)
                 if semantics.is_actionable:
@@ -85,6 +102,7 @@ class WebpageSemanticParser:
     def analyze_element(self, element) -> ElementSemantics:
         """Analyze individual element for semantic meaning."""
         element_type = element.name or element.get('role', 'unknown')
+        logger.debug(f"Analyzing element of type: {element_type}")
         
         # Gather accessibility information
         aria_labels = {
@@ -134,8 +152,10 @@ class WebpageSemanticParser:
         for signal in signals:
             for action, pattern in action_patterns.items():
                 if re.search(pattern, signal, re.I):
+                    logger.debug(f"Inferred purpose '{action}' from signal: {signal}")
                     return action
         
+        logger.debug("Could not infer specific purpose for element")
         return 'unknown'
 
     def get_element_context(self, element) -> Dict:
@@ -158,6 +178,7 @@ class WebpageSemanticParser:
 
     def build_semantic_hierarchy(self):
         """Build hierarchical structure of page content."""
+        logger.info("Building semantic hierarchy of page content")
         self.semantic_structure = {
             'title': self.soup.title.string if self.soup.title else None,
             'main_content': self.parse_main_content(),
@@ -167,6 +188,7 @@ class WebpageSemanticParser:
 
     def parse_main_content(self) -> Dict:
         """Parse main content area of the page."""
+        logger.debug("Parsing main content area")
         main = self.soup.find('main') or self.soup.find('body')
         
         return {
@@ -177,6 +199,7 @@ class WebpageSemanticParser:
     def extract_heading_hierarchy(self, container) -> List[Dict]:
         """Extract hierarchical heading structure."""
         headings = container.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+        logger.debug(f"Found {len(headings)} headings")
         hierarchy = []
         
         for heading in headings:
@@ -204,6 +227,7 @@ class WebpageSemanticParser:
                     content=self.extract_section_content(section)
                 ))
                 
+        logger.debug(f"Extracted {len(sections)} content sections")
         return sections
 
     def infer_section_purpose(self, section) -> str:
@@ -231,8 +255,10 @@ class WebpageSemanticParser:
                 signal = ' '.join(signal)
             for purpose, pattern in purpose_patterns.items():
                 if re.search(pattern, str(signal), re.I):
+                    logger.debug(f"Inferred section purpose: {purpose}")
                     return purpose
                     
+        logger.debug("Could not infer specific section purpose")
         return 'unknown'
 
     def extract_section_content(self, section) -> Dict:
@@ -251,6 +277,7 @@ class WebpageSemanticParser:
     def parse_navigation(self) -> List[Dict]:
         """Parse navigation elements of the page."""
         nav_elements = self.soup.find_all(['nav', '[role="navigation"]'])
+        logger.debug(f"Found {len(nav_elements)} navigation elements")
         navigation = []
         
         for nav in nav_elements:
@@ -268,6 +295,7 @@ class WebpageSemanticParser:
         """Parse forms and their input fields."""
         forms = []
         for form in (container or self.soup).find_all('form'):
+            logger.debug(f"Parsing form: {form.get('name', 'unnamed')}")
             form_data = {
                 'name': form.get('name'),
                 'id': form.get('id'),
@@ -312,10 +340,12 @@ class WebpageSemanticParser:
             input_text = input_field.get_text(strip=True)
             return label_text.replace(input_text, '').strip()
             
+        logger.debug(f"No label found for input: {input_field.get('name', 'unnamed')}")
         return None
 
     def get_available_actions(self) -> Dict:
         """Get all available actions on the page grouped by type."""
+        logger.info("Collecting available actions")
         actions = {}
         
         for element, semantics in self.actionable_elements.items():
@@ -332,6 +362,7 @@ class WebpageSemanticParser:
 
     def identify_possible_tasks(self) -> List[Dict]:
         """Identify possible tasks that can be performed on the page."""
+        logger.info("Identifying possible tasks")
         tasks = []
         
         # Check form submission tasks
@@ -359,26 +390,30 @@ class WebpageSemanticParser:
                 'location': 'search form or input field'
             })
         
+        logger.debug(f"Identified {len(tasks)} possible tasks")
         return tasks
 
 # Example usage
 def analyze_webpage(url: str) -> Dict:
+    logger.info(f"Starting webpage analysis for: {url}")
     parser = WebpageSemanticParser(use_selenium=True)
     understanding = parser.parse_webpage(url)
     
-    print("Available actions:", understanding['actions'])
-    print("Page structure:", understanding['structure'])
-    print("Possible tasks:", understanding['possible_tasks'])
+    logger.info("Analysis complete")
+    logger.debug("Available actions: %s", understanding['actions'])
+    logger.debug("Page structure: %s", understanding['structure'])
+    logger.debug("Possible tasks: %s", understanding['possible_tasks'])
     
     return understanding
 
 def main():
+    logger.info("Starting main function")
     parser = WebpageSemanticParser()
     understanding = parser.parse_webpage("https://heptabase.com")
     print(understanding)
+    logger.info("Main function completed")
 
 
 # To use the parser:
 if __name__ == "__main__":
     main()
-    
